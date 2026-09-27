@@ -58,4 +58,30 @@ spec:
 1. Wire probes into real `deployment.yaml`, watch `kubectl get pods` during a rollout — expect `READY 0/1` briefly on new Pods before `1/1`.
 2. Item 3: debugging practice — deliberately break a probe (wrong port, 404 path) and diagnose live with `kubectl describe pod` and `kubectl logs`. Gives a concrete "bug I hit and fixed" interview story.
 
----
+---Good distinction to nail down — these are two very different operations, and neither of them creates a new Pod.
+
+**"Pulled from the Service's endpoints" (readiness failure)**
+
+Nothing about the Pod itself changes. The Pod isn't touched, deleted, or restarted — it keeps running exactly as it was.
+
+What actually happens: there's a separate object called an **Endpoints** (or **EndpointSlice**) that the Service uses as its routing table — basically a list of "which Pod IPs are currently valid targets." When readiness fails, Kubernetes just **removes that Pod's IP from the list**. The Service now skips it when load-balancing traffic. That's it — it's a routing-table edit, not an action on the Pod.
+
+The moment `/health` starts passing again, the Pod's IP gets added back to that list and it starts receiving traffic again — automatically, no restart involved.
+
+Think of it like a waiter being told "don't seat anyone at table 5 right now" — table 5 isn't removed from the restaurant, it's just skipped when the host is seating people. Nothing happens to the table itself.
+
+**"Kubelet kills and restarts the container" (liveness failure)**
+
+This is different — this one does act on the container, but not the Pod.
+
+- The **Pod** stays the same object — same name, same IP address, same place in the cluster, same entry in `kubectl get pods`.
+- The **container inside it** is what gets killed and restarted — same image, same spec, fresh process. It's like restarting a service on a VM: the VM doesn't go anywhere, just the process inside it gets killed and relaunched.
+- You can see this directly: `RESTARTS` in `kubectl get pods` increments (1, 2, 3...), but the Pod's `AGE` keeps counting from when the Pod was originally created — it doesn't reset. That's your tell that it was a container restart, not a new Pod.
+
+**So to directly answer both parts:**
+- Readiness failing → Pod is **not deleted or restarted at all**. Only its entry in the traffic-routing list is toggled off/on.
+- Liveness failing → **same Pod, same container definition** — kubelet just kills the running container process and starts a fresh one in its place. No new Pod is created.
+
+A new Pod only enters the picture in totally different scenarios — like a Deployment rollout, or if the Pod got evicted from its Node entirely (e.g. Node runs out of resources or dies). Neither probe does that on its own.
+
+Want me to add this Q&A to your notes file, and then move into the debugging exercise?
